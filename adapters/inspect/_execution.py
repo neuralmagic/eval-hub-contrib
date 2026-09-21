@@ -90,7 +90,6 @@ def build_command(
         "inspect", "eval", task_spec,
         "--log-dir", str(log_dir),
         "--log-format", "json",
-        "--no-ansi",
     ]
 
     if mode in ("petri", "bloom"):
