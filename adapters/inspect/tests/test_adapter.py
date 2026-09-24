@@ -285,8 +285,8 @@ def test_sample_limit_from_num_examples(job_spec_path, tmp_path, monkeypatch):
     assert cmd[cmd.index("--limit") + 1] == "7"
 
 
-def test_sample_limit_defaults_without_num_examples(job_spec_path, tmp_path, monkeypatch):
-    """--limit defaults to 5 when num_examples is unset (max_samples is ignored)."""
+def test_sample_limit_unbounded_without_num_examples(job_spec_path, tmp_path, monkeypatch):
+    """Standard benchmarks omit --limit when num_examples is unset (max_samples is ignored)."""
     monkeypatch.setenv("OPENAI_BASE_URL", "http://vllm:8080/v1")
     adapter = InspectAdapter(job_spec_path=job_spec_path)
     adapter.job_spec.benchmark_id = "inspect/gsm8k"
@@ -294,6 +294,18 @@ def test_sample_limit_defaults_without_num_examples(job_spec_path, tmp_path, mon
     adapter.job_spec.parameters["max_samples"] = 12
     env = adapter._build_env(adapter.job_spec, "standard")
     cmd = adapter._build_command(adapter.job_spec, "standard", "inspect_evals/gsm8k", tmp_path, None, env)
+    assert "--limit" not in cmd
+
+
+def test_sample_limit_defaults_for_petri_without_num_examples(job_spec_path, tmp_path, monkeypatch):
+    """Petri/Bloom still default to --limit 5 when num_examples is unset."""
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://vllm:8080/v1")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    adapter = InspectAdapter(job_spec_path=job_spec_path)
+    adapter.job_spec.benchmark_id = "petri"
+    adapter.job_spec.num_examples = None
+    env = adapter._build_env(adapter.job_spec, "petri")
+    cmd = adapter._build_command(adapter.job_spec, "petri", "petri/audit", tmp_path, None, env)
     assert "--limit" in cmd
     assert cmd[cmd.index("--limit") + 1] == "5"
 

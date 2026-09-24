@@ -140,9 +140,9 @@ appears). Sidecar `:ref` placeholders are ignored. In EvalHub jobs, set
 ### Sample limits
 
 Inspect `--limit` is driven by `benchmarks[].parameters.num_examples` (lifted to
-JobSpec `num_examples` by eval-hub). When unset, the adapter defaults to `--limit 5`
-so Petri/Bloom and large datasets do not run unbounded. Set an explicit
-`num_examples` to raise or lower the cap.
+JobSpec `num_examples` by eval-hub). When unset, standard benchmarks omit `--limit`
+and run the full dataset; Petri/Bloom default to `--limit 5` so open-ended audit
+scenarios do not run unbounded. Set an explicit `num_examples` to cap samples.
 
 Open-Telco dataset size is controlled via `parameters.full`
 (`true` → `GSMA/ot-full`, `false` → `GSMA/ot-lite`). TeleQnA also accepts

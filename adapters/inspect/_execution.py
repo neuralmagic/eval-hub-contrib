@@ -97,6 +97,22 @@ def build_command(
     env: dict[str, str],
 ) -> list[str]:
     """Build the inspect eval CLI command."""
+
+    """
+    if env.get("EVALHUB_MODE", "") == "k8s":
+        cmd = [
+            "inspect", "eval", task_spec,
+            "--log-dir", str(log_dir),
+        ]
+    else:
+        cmd = [
+            "inspect", "eval", task_spec,
+            "--log-dir", str(log_dir),
+            "--log-format", "json",
+            "--no-ansi",
+        ]
+
+    """
     cmd = [
         "inspect", "eval", task_spec,
         "--log-dir", str(log_dir),
@@ -136,9 +152,12 @@ def build_command(
         cmd += ["--max-tasks", str(max_tasks)]
 
     # Sample limit from JobSpec.num_examples (lifted from benchmarks[].parameters.num_examples).
-    # Default to 5 when unset so Petri/Bloom (and large datasets) do not run unbounded.
-    limit = int(config.num_examples) if config.num_examples is not None else 5
-    cmd += ["--limit", str(limit)]
+    # When unset, Petri/Bloom still default to 5 (audit scenarios are open-ended and costly);
+    # standard benchmarks omit --limit and run the full dataset.
+    if config.num_examples is not None:
+        cmd += ["--limit", str(int(config.num_examples))]
+    elif mode in ("petri", "bloom"):
+        cmd += ["--limit", "5"]
 
     epochs = config.parameters.get("epochs")
     if epochs and epochs > 1:
@@ -243,6 +262,60 @@ def _petri_task_flags(
 
 def run_inspect(cmd: list[str], env: dict[str, str], log_dir: Path) -> Path:
     refresh_hf_hub_auth(env)
+
+    timeout = None if env.get("EVALHUB_MODE", "") == "k8s" else 7200
+
+    try:
+        process = subprocess.Popen(
+            cmd,
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+        )
+
+        assert process.stdout is not None
+
+        for line in process.stdout:
+            print(line, end="", flush=True)
+
+        return_code = process.wait(timeout=timeout)
+
+    except subprocess.TimeoutExpired as e:
+        process.kill()
+        process.wait()
+        raise RuntimeError(
+            f"inspect eval timed out after {timeout} seconds."
+        ) from e
+
+    except (subprocess.SubprocessError, OSError):
+        logger.exception("Subprocess failed")
+        raise
+
+    if return_code != 0:
+        raise RuntimeError(
+            f"inspect eval failed with exit code {return_code}."
+        )
+
+    log_files = sorted(
+        log_dir.glob("*.json"),
+        key=lambda path: path.stat().st_mtime,
+    )
+
+    if not log_files:
+        raise RuntimeError(
+            f"inspect eval produced no JSON log in {log_dir}."
+        )
+
+    log_file = log_files[-1]
+    logger.info("Inspect log: %s", log_file)
+
+    return log_file
+
+"""
+def run_inspect(cmd: list[str], env: dict[str, str], log_dir: Path) -> Path:
+    refresh_hf_hub_auth(env)
     try:
         if env.get("EVALHUB_MODE", "") == "k8s":
             # allows long running benchmarks in k8s to run indefinitely
@@ -278,7 +351,7 @@ def run_inspect(cmd: list[str], env: dict[str, str], log_dir: Path) -> Path:
     log_file = log_files[-1]
     logger.info(f"Inspect log: {log_file}")
     return log_file
-
+"""
 
 def get_inspect_version() -> str:
     try:
