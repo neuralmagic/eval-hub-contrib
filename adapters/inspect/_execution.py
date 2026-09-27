@@ -23,6 +23,14 @@ logger = logging.getLogger(__name__)
 
 _API_KEY_RE = re.compile(r'"api_key"\s*:\s*"[^"]*"')
 
+# Inspect runs all samples in parallel by default, and the k8s sandbox provider
+# declares no default_concurrency, so an uncapped run asks the cluster for one
+# sandbox per sample simultaneously — a 500-sample dataset then fails scheduling
+# (Insufficient cpu/memory) rather than queueing. Cap it; samples beyond the cap
+# wait for a slot. Override with parameters.max_sandboxes; set it to 0 to remove
+# the cap entirely.
+DEFAULT_MAX_SANDBOXES = 4
+
 
 def redact_cmd(cmd: list[str]) -> str:
     """Return a loggable representation of cmd with api_key values redacted."""
@@ -133,6 +141,10 @@ def build_command(
         sandbox = config.parameters.get("sandbox", "local")
         if sandbox not in ("none", None):
             cmd += ["--sandbox", sandbox]
+
+            max_sandboxes = config.parameters.get("max_sandboxes", DEFAULT_MAX_SANDBOXES)
+            if max_sandboxes:
+                cmd += ["--max-sandboxes", str(int(max_sandboxes))]
 
         # Optional model-role overrides for benchmarks that use judge/grader
         # models (e.g. HLE defaults to an OpenRouter judge). Provider YAML can

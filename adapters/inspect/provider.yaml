@@ -947,6 +947,15 @@ parameters:
       Standard mode only. Execution sandbox type: 'none', 'docker', 'k8s'.
       Use 'docker' for tasks requiring code execution isolation (swe-bench, humaneval).
 
+  - name: max_sandboxes
+    type: integer
+    default: 4
+    description: >
+      Maximum sandbox environments running concurrently. Ignored when sandbox is
+      'none'. Samples beyond this cap queue for a free slot, so dataset size does
+      not change peak cluster usage. Raise it if the cluster has spare capacity;
+      set it to 0 to run every sample's sandbox in parallel (uncapped).
+
   # --- Common ---
   - name: max_tasks
     type: integer
