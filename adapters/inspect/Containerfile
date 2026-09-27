@@ -5,6 +5,32 @@ USER 0
 
 WORKDIR /app
 
+# ── Helm CLI ──────────────────────────────────────────────────────────────────
+#
+# Required by inspect_k8s_sandbox, which a job selects with parameters.sandbox=k8s
+# (e.g. swe-bench). The provider shells out to `helm` in task_init() and aborts
+# the eval before the first sample if it is missing, or older than 3.13.0 — the
+# release that added `--ignore-not-found`. Jobs using the default "local" sandbox
+# never load the provider and do not need this.
+#
+# Airgapped builds: this step needs get.helm.sh. Mirror the tarball internally and
+# point HELM_BASE_URL at it, or vendor the binary into the build context and swap
+# the download for a COPY.
+ARG HELM_VERSION=3.20.0
+ARG HELM_BASE_URL=https://get.helm.sh
+RUN set -eux; \
+    case "$(uname -m)" in \
+      x86_64)  helm_arch=amd64 ;; \
+      aarch64) helm_arch=arm64 ;; \
+      *) echo "FATAL: no Helm build for $(uname -m)" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSL "${HELM_BASE_URL}/helm-v${HELM_VERSION}-linux-${helm_arch}.tar.gz" \
+      -o /tmp/helm.tar.gz; \
+    tar -xzf /tmp/helm.tar.gz -C /tmp "linux-${helm_arch}/helm"; \
+    install -m 0755 "/tmp/linux-${helm_arch}/helm" /usr/local/bin/helm; \
+    rm -rf /tmp/helm.tar.gz "/tmp/linux-${helm_arch}"; \
+    helm version --short
+
 # ── Python dependencies ───────────────────────────────────────────────────────
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
