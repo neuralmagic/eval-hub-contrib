@@ -11,3 +11,8 @@ evals @ git+https://github.com/gsma-labs/evals.git@v1.1.0
 # Data (punkt, punkt_tab, wordnet) is pre-seeded in the image at build time —
 # no network access required at runtime.
 nltk>=3.10.3
+# Pinned below 3.1.0: k8s_sandbox/_prereqs.py parses `helm version --short`
+# output without stripping its trailing newline. semver 3.0.x tolerated that;
+# 3.1.0 tightened the regex and rejects it, breaking every k8s-sandbox job at
+# startup. Drop this pin once inspect-k8s-sandbox strips the newline.
+semver<3.1.0
