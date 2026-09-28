@@ -31,6 +31,16 @@ _API_KEY_RE = re.compile(r'"api_key"\s*:\s*"[^"]*"')
 # the cap entirely.
 DEFAULT_MAX_SANDBOXES = 4
 
+# k8s_sandbox caches a Kubernetes client per thread and, by default, never
+# rebuilds it (INSPECT_K8S_CLIENT_REFRESH_SECONDS=0 upstream). The projected
+# service account token mounted into the job pod is rotated by the kubelet, so on
+# a long eval the cached client eventually presents an expired token and pod
+# exec starts failing with 401 Unauthorized part-way through the run. Refreshing
+# hourly-ish keeps the client's token current. Override with
+# parameters.k8s_client_refresh_seconds; 0 restores the upstream default.
+K8S_CLIENT_REFRESH_ENV = "INSPECT_K8S_CLIENT_REFRESH_SECONDS"
+DEFAULT_K8S_CLIENT_REFRESH_SECONDS = 600
+
 
 def redact_cmd(cmd: list[str]) -> str:
     """Return a loggable representation of cmd with api_key values redacted."""
@@ -91,6 +101,15 @@ def build_env(config: JobSpec, mode: str) -> dict[str, str]:
     # Gated datasets (Open-Telco, humaneval, mmlu, …) need Hub auth when not offline.
     if env.get("HF_HUB_OFFLINE") != "1":
         apply_hf_hub_auth(env)
+
+    # Keep the k8s sandbox's cached Kubernetes client from outliving its token.
+    # An explicit value in the environment wins, so this can be tuned per
+    # deployment without a rebuild.
+    if p.get("sandbox") == "k8s" and not env.get(K8S_CLIENT_REFRESH_ENV):
+        refresh = p.get(
+            "k8s_client_refresh_seconds", DEFAULT_K8S_CLIENT_REFRESH_SECONDS
+        )
+        env[K8S_CLIENT_REFRESH_ENV] = str(int(refresh))
 
     env["INSPECT_NO_TELEMETRY"] = "1"
     return env
@@ -189,7 +208,9 @@ def build_command(
 
 
 # Open-Telco (and similar) first-class -T parameters — keep flat under parameters, not task_args.
-_FIRST_CLASS_TASK_PARAMS = ("full", "subject", "eval_type")
+# allow_internet is swe-bench's switch for sandbox egress; only emitted when the
+# job sets it, so tasks that don't accept the argument are unaffected.
+_FIRST_CLASS_TASK_PARAMS = ("full", "subject", "eval_type", "allow_internet")
 
 
 def _task_args(config: JobSpec) -> dict:

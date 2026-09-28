@@ -956,6 +956,18 @@ parameters:
       not change peak cluster usage. Raise it if the cluster has spare capacity;
       set it to 0 to run every sample's sandbox in parallel (uncapped).
 
+  - name: allow_internet
+    type: boolean
+    default: true
+    description: >
+      Grant sandboxes outbound internet access. Only tasks that accept an
+      allow_internet task parameter honour it (e.g. inspect_evals/swe_bench).
+      Sandboxes are network-isolated by default: they reach cluster DNS and each
+      other and nothing else, so a test suite that installs packages or clones a
+      repo at runtime fails with connection timeouts. Enabling it opens egress to
+      any address on TCP 80, 443, 8443, 8000 and 5000 -- there is no per-domain
+      restriction on non-Cilium clusters, so leave it off unless a task needs it.
+
   # --- Common ---
   - name: max_tasks
     type: integer
