@@ -11,6 +11,19 @@ evals @ git+https://github.com/gsma-labs/evals.git@v1.1.0
 # Data (punkt, punkt_tab, wordnet) is pre-seeded in the image at build time —
 # no network access required at runtime.
 nltk>=3.10.3
+# Kubernetes sandbox provider, selected with parameters.sandbox=k8s (e.g. swe-bench).
+# Pinned to the neuralmagic fork rather than upstream PyPI because upstream's Helm
+# chart only emits CiliumNetworkPolicy, which OpenShift/OVN-Kubernetes clusters
+# cannot install, and its DNS egress rule allows only kube-system — OpenShift runs
+# CoreDNS in openshift-dns, so every lookup inside a sandbox failed to resolve.
+# The fork adds networkPolicyProvider=ovn (plain NetworkPolicy), the
+# openshift-dns egress peer, and an allowDomains default of ["*"].
+#
+# Pinned to a SHA, not the add_ovn_sandbox branch: images built before this line
+# existed resolved the branch tip, so two builds of the same Containerfile could
+# ship different chart templates. Re-pin when the fork moves — a stale SHA
+# silently reverts chart behaviour rather than failing the build.
+inspect-k8s-sandbox @ git+https://github.com/neuralmagic/inspect_k8s_sandbox.git@d79380d8ea55f82fdae69b1183f05d50efd02ecd
 # Pinned below 3.1.0: k8s_sandbox/_prereqs.py parses `helm version --short`
 # output without stripping its trailing newline. semver 3.0.x tolerated that;
 # 3.1.0 tightened the regex and rejects it, breaking every k8s-sandbox job at
