@@ -111,6 +111,16 @@ def build_env(config: JobSpec, mode: str) -> dict[str, str]:
         )
         env[K8S_CLIENT_REFRESH_ENV] = str(int(refresh))
 
+    # Turn up the OpenAI SDK's own logger to surface why it is retrying (status
+    # code, timeout) against an OpenAI-compatible endpoint. It raises only the
+    # `openai` logger -- the SDK deliberately leaves transport loggers alone --
+    # so this stays quiet where `--log-level debug` does not. Needs
+    # parameters.log_level_transcript=debug too, or the records are filtered out
+    # by the log handler before they reach anything.
+    openai_log = p.get("openai_log")
+    if openai_log:
+        env["OPENAI_LOG"] = openai_log
+
     env["INSPECT_NO_TELEMETRY"] = "1"
     return env
 
@@ -195,6 +205,16 @@ def build_command(
         cmd += ["--epochs", str(epochs)]
 
     cmd += ["--log-level", config.parameters.get("log_level", "info")]
+
+    # Inspect's log handler only captures records at or above
+    # min(TRACE=13, log_level, log_level_transcript), so DEBUG (10) records are
+    # dropped unless one of the two levels is itself debug. Lowering the
+    # transcript level rather than log_level is what makes provider-SDK debug
+    # output (see openai_log) reachable without also enabling httpcore's
+    # per-packet trace, which inherits the root level and buries the log.
+    log_level_transcript = config.parameters.get("log_level_transcript")
+    if log_level_transcript:
+        cmd += ["--log-level-transcript", log_level_transcript]
 
     for key, value in _task_args(config).items():
         if isinstance(value, bool):

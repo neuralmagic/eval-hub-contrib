@@ -1009,6 +1009,23 @@ parameters:
     default: info
     description: Inspect AI log verbosity ('debug', 'info', 'warning', 'error').
 
+  - name: log_level_transcript
+    type: string
+    description: >
+      Verbosity of records written to the eval transcript, independent of
+      log_level. Set to 'debug' to capture DEBUG records without setting
+      log_level=debug, which also enables httpcore's per-packet trace and makes
+      the log unreadable. Required for openai_log to have any effect.
+
+  - name: openai_log
+    type: string
+    description: >
+      Raise the OpenAI SDK's own logger ('debug' or 'info') to show why it is
+      retrying a request -- the status code or timeout behind an otherwise
+      unexplained 'Retrying request' line. Only the openai logger is affected.
+      Pair with log_level_transcript=debug, otherwise the records are filtered
+      out before they are written anywhere.
+
   - name: languages
     type: array
     default: [en]
