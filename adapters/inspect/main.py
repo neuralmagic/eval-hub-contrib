@@ -27,7 +27,9 @@ Module structure:
 
 import logging
 import os
+import re
 import shutil
+import subprocess
 import tempfile
 import time
 from datetime import UTC, datetime
@@ -67,6 +69,54 @@ from _routing import (
 )
 
 logger = logging.getLogger(__name__)
+
+# inspect_k8s_sandbox requires `helm --ignore-not-found`, added in Helm 3.13.0.
+MINIMUM_HELM_VERSION = (3, 13, 0)
+
+
+def _check_helm_available() -> None:
+    """Fail fast when the k8s sandbox is requested but Helm is unusable.
+
+    inspect_k8s_sandbox shells out to the `helm` CLI and aborts at task_init,
+    after the dataset has already been downloaded. Checking up front turns that
+    late traceback into an actionable error.
+    """
+    helm = shutil.which("helm")
+    if helm is None:
+        raise ValueError(
+            "parameters.sandbox='k8s' requires the Helm CLI "
+            f">={'.'.join(map(str, MINIMUM_HELM_VERSION))}, which is not installed "
+            "in this image. Add it to the Containerfile. "
+            "See https://helm.sh/docs/intro/install/"
+        )
+
+    # A missing/unparseable version is not worth failing the job over —
+    # inspect_k8s_sandbox performs the authoritative check at task_init.
+    try:
+        output = subprocess.run(
+            [helm, "version", "--short"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=True,
+        ).stdout.strip()
+    except Exception as e:
+        logger.warning(f"Could not determine Helm version: {e}")
+        return
+
+    # Typical output: "v3.16.1+g3bb50bb"
+    match = re.match(r"v?(\d+)\.(\d+)\.(\d+)", output)
+    if match is None:
+        logger.warning(f"Could not parse Helm version from {output!r}")
+        return
+
+    version = tuple(int(part) for part in match.groups())
+    if version < MINIMUM_HELM_VERSION:
+        raise ValueError(
+            "parameters.sandbox='k8s' requires the Helm CLI "
+            f">={'.'.join(map(str, MINIMUM_HELM_VERSION))}, but this image has "
+            f"{output}. Upgrade Helm in the Containerfile."
+        )
 
 
 class InspectAdapter(FrameworkAdapter):
@@ -238,6 +288,9 @@ class InspectAdapter(FrameworkAdapter):
         return "standard"
 
     def _validate_config(self, config: JobSpec, mode: str) -> None:
+        if config.parameters.get("sandbox") == "k8s":
+            _check_helm_available()
+
         if mode == "petri" and config.benchmark_id not in PETRI_SEED_MAP:
             raise ValueError(f"Unknown Petri benchmark '{config.benchmark_id}'. Known: {sorted(PETRI_SEED_MAP)}")
 
