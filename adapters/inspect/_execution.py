@@ -14,7 +14,6 @@ from _hf_auth import apply_hf_hub_auth, refresh_hf_hub_auth
 from _hf_offline import (
     TEST_DATA_DIR,
     configure_hf_offline_environment,
-    ensure_test_data_ready_for_offline,
     should_use_hf_offline,
 )
 from _routing import _is_ollama_endpoint, role_model_spec, route_model, select_client, target_model_spec
@@ -74,10 +73,11 @@ def build_env(config: JobSpec, mode: str) -> dict[str, str]:
 
     # Staged S3/PVC/git test data (test_data_ref) or tokenizer+/test_data layout → offline Hub.
     if should_use_hf_offline(p):
-        configure_hf_offline_environment(TEST_DATA_DIR, env)
+        values = configure_hf_offline_environment(TEST_DATA_DIR, env)
         logger.info(
-            "HF offline mode: HF_HOME=%s (staged test data), Hub downloads disabled",
-            TEST_DATA_DIR,
+            "HF offline mode: HF_HOME=%s (writable), HF_HUB_CACHE=%s (staged), Hub downloads disabled",
+            values["HF_HOME"],
+            values["HF_HUB_CACHE"],
         )
 
     # Gated datasets (Open-Telco, humaneval, mmlu, …) need Hub auth when not offline.

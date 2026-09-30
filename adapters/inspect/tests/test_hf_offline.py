@@ -1,6 +1,7 @@
 """Tests for Hugging Face offline detection and env configuration."""
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -11,6 +12,30 @@ from _hf_offline import (
     should_use_hf_offline,
 )
 from _execution import build_env
+
+
+_HF_ENV_KEYS = (
+    "HF_HOME",
+    "HF_HUB_CACHE",
+    "HF_DATASETS_CACHE",
+    "HF_HUB_OFFLINE",
+    "HF_DATASETS_OFFLINE",
+    "HF_EVALUATE_OFFLINE",
+    "TRANSFORMERS_OFFLINE",
+    "XDG_CACHE_HOME",
+)
+
+
+@pytest.fixture(autouse=True)
+def restore_hf_env():
+    """configure_hf_offline_environment writes os.environ process-wide; undo it per test."""
+    saved = {k: os.environ.get(k) for k in _HF_ENV_KEYS}
+    yield
+    for key, value in saved.items():
+        if value is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = value
 
 
 def _touch(p: Path) -> None:
@@ -75,15 +100,65 @@ def test_build_env_sets_hf_offline(monkeypatch, fake_test_data: Path, job_spec_p
     adapter.job_spec.parameters["tokenizer"] = str((fake_test_data / "tokenizer").resolve())
     env = build_env(adapter.job_spec, "standard")
     assert env.get("HF_HUB_OFFLINE") == "1"
-    assert env.get("HF_HOME") == str(fake_test_data)
+    # HF_HOME must stay off the staged mount — huggingface_hub and datasets write there.
+    assert env.get("HF_HOME") != str(fake_test_data)
+    assert not Path(env["HF_HOME"]).is_relative_to(fake_test_data)
 
 
 def test_configure_hf_offline_environment_updates_os_environ(monkeypatch, tmp_path: Path) -> None:
-    root = tmp_path / "cache"
-    root.mkdir()
+    staged = tmp_path / "test_data"
+    staged.mkdir()
+    writable = tmp_path / "cache" / "huggingface"
+    monkeypatch.setenv("HF_HOME", str(writable))
     env: dict[str, str] = {}
-    configure_hf_offline_environment(str(root), env)
-    assert env["HF_HOME"] == str(root)
-    assert env["HF_HUB_CACHE"] == str(root / "hub")
-    assert env["HF_DATASETS_CACHE"] == str(root / "datasets")
+    configure_hf_offline_environment(str(staged), env)
+    assert env["HF_HOME"] == str(writable)
+    assert env["HF_HUB_CACHE"] == str(writable / "hub")
+    assert env["HF_DATASETS_CACHE"] == str(writable / "datasets")
     assert env["HF_HUB_OFFLINE"] == "1"
+    assert os.environ["HF_HOME"] == str(writable)
+
+
+def test_staged_hub_cache_is_used_for_hub_reads(monkeypatch, tmp_path: Path) -> None:
+    """A staged `hub/` layout serves hub reads while HF_HOME stays writable."""
+    staged = tmp_path / "test_data"
+    (staged / "hub" / "datasets--GSMA--ot-full").mkdir(parents=True)
+    writable = tmp_path / "cache" / "huggingface"
+    monkeypatch.setenv("HF_HOME", str(writable))
+
+    env: dict[str, str] = {}
+    configure_hf_offline_environment(str(staged), env)
+
+    assert env["HF_HUB_CACHE"] == str(staged / "hub")
+    assert env["HF_HOME"] == str(writable)
+    assert env["HF_DATASETS_CACHE"] == str(writable / "datasets")
+
+
+def test_read_only_staged_mount_is_never_chosen_as_hf_home(monkeypatch, tmp_path: Path) -> None:
+    """Regression: HF_HOME=/test_data breaks when the sync mounts it read-only."""
+    staged = tmp_path / "test_data"
+    (staged / "hub").mkdir(parents=True)
+    staged.chmod(0o555)
+    monkeypatch.delenv("HF_HOME", raising=False)
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "app-cache"))
+    try:
+        env: dict[str, str] = {}
+        configure_hf_offline_environment(str(staged), env)
+        assert env["HF_HOME"] == str(tmp_path / "app-cache" / "huggingface")
+        assert Path(env["HF_HOME"]).is_dir()
+        assert env["HF_HUB_CACHE"] == str(staged / "hub")
+    finally:
+        staged.chmod(0o755)
+
+
+def test_hf_home_pointing_at_staged_mount_is_rejected(monkeypatch, tmp_path: Path) -> None:
+    """An operator-set HF_HOME inside /test_data is ignored, not honoured."""
+    staged = tmp_path / "test_data"
+    staged.mkdir()
+    monkeypatch.setenv("HF_HOME", str(staged))
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "app-cache"))
+
+    env: dict[str, str] = {}
+    configure_hf_offline_environment(str(staged), env)
+
+    assert env["HF_HOME"] == str(tmp_path / "app-cache" / "huggingface")

@@ -15,6 +15,7 @@ import json
 import logging
 import os
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +23,7 @@ logger = logging.getLogger(__name__)
 
 TEST_DATA_DIR = "/test_data"
 _JOB_SPEC_ALLOWED_ROOT = Path("/meta")
+_WRITE_PROBE_NAME = ".evalhub-write-probe"
 
 
 def _resolve_job_spec_path_for_read(path: str) -> Path | None:
@@ -157,16 +159,100 @@ def job_spec_requests_test_data(path: str | None = None) -> bool:
     return _has_test_data_ref(_read_job_spec_dict_from_path(job_path))
 
 
+def _is_writable_dir(path: Path) -> bool:
+    """True when ``path`` can be created (if absent) and written to by the current UID."""
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return False
+    probe = path / _WRITE_PROBE_NAME
+    try:
+        probe.touch()
+        probe.unlink()
+    except OSError:
+        return False
+    return True
+
+
+def _hf_home_candidates(staged_root: Path) -> list[Path]:
+    """Writable-cache candidates, most specific first. Never the staged data mount."""
+    candidates: list[Path] = []
+    explicit = os.environ.get("HF_HOME", "").strip()
+    xdg = os.environ.get("XDG_CACHE_HOME", "").strip()
+    home = os.environ.get("HOME", "").strip()
+    if explicit:
+        candidates.append(Path(explicit))
+    if xdg:
+        candidates.append(Path(xdg) / "huggingface")
+    if home:
+        candidates.append(Path(home) / ".cache" / "huggingface")
+    candidates.append(Path(tempfile.gettempdir()) / "huggingface")
+
+    staged = staged_root.resolve() if staged_root.exists() else staged_root
+    out: list[Path] = []
+    for candidate in candidates:
+        resolved = candidate.resolve() if candidate.exists() else candidate
+        if resolved == staged or resolved.is_relative_to(staged):
+            continue
+        if resolved not in out:
+            out.append(resolved)
+    return out
+
+
+def resolve_writable_hf_home(staged_root: str | Path = TEST_DATA_DIR) -> Path:
+    """First writable Hugging Face cache root outside the staged test data.
+
+    ``/test_data`` is populated by the Eval Hub sync and is routinely read-only or owned
+    by another UID — on OpenShift the pod gets an arbitrary UID in group 0 — so it can
+    never serve as ``HF_HOME``: huggingface_hub and datasets write lock and fingerprint
+    files there even with downloads disabled.
+    """
+    candidates = _hf_home_candidates(Path(staged_root))
+    for candidate in candidates:
+        if _is_writable_dir(candidate):
+            return candidate
+    raise RuntimeError(
+        "No writable Hugging Face cache directory found. Tried: "
+        + ", ".join(str(c) for c in candidates)
+        + ". Set HF_HOME to a writable path (an emptyDir volume works) on the job pod."
+    )
+
+
+def _staged_hub_cache(staged_root: Path) -> Path | None:
+    """Locate a Hugging Face hub cache layout inside the staged test data, if there is one."""
+    hub = staged_root / "hub"
+    if hub.is_dir():
+        return hub
+    try:
+        for child in staged_root.iterdir():
+            if child.is_dir() and child.name.startswith(("models--", "datasets--")):
+                return staged_root
+    except OSError:
+        return None
+    return None
+
+
 def configure_hf_offline_environment(
-    hf_home: str,
+    staged_root: str,
     env: dict[str, str] | None = None,
-) -> None:
-    """Use local Hugging Face caches only (disconnected / no huggingface.co)."""
-    root = Path(hf_home)
+) -> dict[str, str]:
+    """Use local Hugging Face caches only (disconnected / no huggingface.co).
+
+    ``HF_HOME`` and ``HF_DATASETS_CACHE`` stay on a writable path; only the hub cache is
+    pointed at the staged mount, and only when that mount actually holds a hub cache
+    layout. A read-only hub cache is safe to read: ``hf_hub_download`` calls
+    ``os.makedirs(storage_folder, exist_ok=True)`` before its ``local_files_only``
+    branch, which is a no-op when the staged repo folder already exists.
+
+    Returns the environment values that were applied.
+    """
+    staged = Path(staged_root)
+    hf_home = resolve_writable_hf_home(staged)
+    hub_cache = _staged_hub_cache(staged) or (hf_home / "hub")
     values = {
-        "HF_HOME": str(root),
-        "HF_HUB_CACHE": str(root / "hub"),
-        "HF_DATASETS_CACHE": str(root / "datasets"),
+        "HF_HOME": str(hf_home),
+        "HF_HUB_CACHE": str(hub_cache),
+        "HF_DATASETS_CACHE": str(hf_home / "datasets"),
         "HF_HUB_OFFLINE": "1",
         "HF_DATASETS_OFFLINE": "1",
         "HF_EVALUATE_OFFLINE": "1",
@@ -176,6 +262,7 @@ def configure_hf_offline_environment(
         os.environ[key] = value
         if env is not None:
             env[key] = value
+    return values
 
 
 def ensure_test_data_ready_for_offline(
@@ -210,10 +297,11 @@ def seed_hf_offline_from_job_spec_file() -> None:
     spec = _read_job_spec_dict_from_path(path)
     parameters = spec.get("parameters") if isinstance(spec.get("parameters"), dict) else {}
     if should_use_hf_offline(parameters, job_spec_path=path):
-        configure_hf_offline_environment(TEST_DATA_DIR)
+        values = configure_hf_offline_environment(TEST_DATA_DIR)
         logger.info(
-            "HF offline mode (import-time seed): HF_HOME=%s, Hub downloads disabled",
-            TEST_DATA_DIR,
+            "HF offline mode (import-time seed): HF_HOME=%s, HF_HUB_CACHE=%s, Hub downloads disabled",
+            values["HF_HOME"],
+            values["HF_HUB_CACHE"],
         )
 
 
