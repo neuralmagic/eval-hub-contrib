@@ -101,8 +101,10 @@ def build_command(
         "inspect", "eval", task_spec,
         "--log-dir", str(log_dir),
         "--log-format", "json",
-        "--no-ansi",
     ]
+
+    if env.get("EVALHUB_MODE", "") =! "k8s":
+        cmd += ["--no-ansi"]
 
     if mode in ("petri", "bloom"):
         # All model roles via --model-role CLI flags. Click's multiple=True
@@ -135,10 +137,15 @@ def build_command(
     if max_tasks:
         cmd += ["--max-tasks", str(max_tasks)]
 
-    # Sample limit from JobSpec.num_examples (lifted from benchmarks[].parameters.num_examples).
-    # Default to 5 when unset so Petri/Bloom (and large datasets) do not run unbounded.
-    limit = int(config.num_examples) if config.num_examples is not None else 5
-    cmd += ["--limit", str(limit)]
+
+    if config.num_examples is not None:
+        limit = int(config.num_examples)
+        cmd += ["--limit", str(limit)]
+    elif env.get("EVALHUB_MODE", "") =! "k8s":
+        # Sample limit from JobSpec.num_examples (lifted from benchmarks[].parameters.num_examples).
+        # Default to 5 when unset so Petri/Bloom (and large datasets) do not run unbounded.
+        limit = 5
+        cmd += ["--limit", str(limit)]
 
     epochs = config.parameters.get("epochs")
     if epochs and epochs > 1:
