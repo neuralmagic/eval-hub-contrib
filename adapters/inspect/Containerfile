@@ -142,6 +142,50 @@ for pkg, resource in REQUIRED.items():
 print(f'\nNLTK data bundled at {NLTK_DIR}')
 PYEOF
 
+# ── helm CLI — required by the k8s sandbox provider ──────────────────────────
+#
+# Standard-mode benchmarks that need an execution sandbox (swe_bench, and any
+# task run with parameters.sandbox=k8s) are dispatched by inspect-ai to the
+# inspect-k8s-sandbox provider, which shells out to the `helm` CLI to deploy
+# per-sample sandbox pods. Without it the run aborts during preflight with:
+#
+#   K8s sandbox environments require helm (CLI) version >= 3.13.0.
+#
+# Note this only satisfies the *client-side* requirement. The k8s sandbox also
+# needs a reachable Kubernetes API and a service account with RBAC to create
+# pods/services in the job namespace; neither is provided by this image.
+#
+# Airgapped deployments: mirror the helm release tarball and its .sha256sum to
+# an internal host and override HELM_BASE_URL, e.g.
+#
+#   podman build --build-arg HELM_BASE_URL=https://mirror.internal/helm -t community-inspect .
+#
+# The architecture is derived from `uname -m` inside the build rather than from
+# buildkit's TARGETARCH, so the build behaves identically under plain
+# `podman build` / `docker build` without buildx.
+#
+# The checksum is fetched from the same origin as the tarball, so it guards
+# against truncated or corrupt downloads rather than against a compromised
+# upstream; vendor a pinned digest here if you need that stronger guarantee.
+ARG HELM_VERSION=v3.16.3
+ARG HELM_BASE_URL=https://get.helm.sh
+RUN set -eu; \
+    case "$(uname -m)" in \
+      x86_64)  helm_arch=amd64 ;; \
+      aarch64) helm_arch=arm64 ;; \
+      *) echo "FATAL: unsupported architecture $(uname -m) for helm install" >&2; exit 1 ;; \
+    esac; \
+    tarball="helm-${HELM_VERSION}-linux-${helm_arch}.tar.gz"; \
+    cd /tmp; \
+    curl -fsSL -o "${tarball}" "${HELM_BASE_URL}/${tarball}"; \
+    curl -fsSL -o "${tarball}.sha256sum" "${HELM_BASE_URL}/${tarball}.sha256sum"; \
+    sha256sum -c "${tarball}.sha256sum"; \
+    tar -xzf "${tarball}" "linux-${helm_arch}/helm"; \
+    mv "linux-${helm_arch}/helm" /usr/local/bin/helm; \
+    chmod 0755 /usr/local/bin/helm; \
+    rm -rf "${tarball}" "${tarball}.sha256sum" "linux-${helm_arch}"; \
+    helm version --short
+
 # ── Adapter source ────────────────────────────────────────────────────────────
 COPY *.py .
 
