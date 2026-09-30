@@ -103,7 +103,7 @@ def build_command(
         "--log-format", "json",
     ]
 
-    if env.get("EVALHUB_MODE", "") =! "k8s":
+    if env.get("EVALHUB_MODE", "") != "k8s":
         cmd += ["--no-ansi"]
 
     if mode in ("petri", "bloom"):
@@ -141,7 +141,7 @@ def build_command(
     if config.num_examples is not None:
         limit = int(config.num_examples)
         cmd += ["--limit", str(limit)]
-    elif env.get("EVALHUB_MODE", "") =! "k8s":
+    elif env.get("EVALHUB_MODE", "") != "k8s":
         # Sample limit from JobSpec.num_examples (lifted from benchmarks[].parameters.num_examples).
         # Default to 5 when unset so Petri/Bloom (and large datasets) do not run unbounded.
         limit = 5
