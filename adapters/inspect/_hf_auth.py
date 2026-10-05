@@ -3,6 +3,7 @@
 import logging
 import os
 import time
+from pathlib import Path
 
 from evalhub.adapter.auth import read_model_auth_key
 
@@ -10,16 +11,40 @@ logger = logging.getLogger(__name__)
 
 _HF_MOUNT_KEY = "hf-token"
 _ENV_KEYS = ("HF_TOKEN", "HUGGING_FACE_HUB_TOKEN")
-_K8S_WAIT_TIMEOUT_S = 60.0
+# Kubernetes projects the model auth secret here; mirrors evalhub.adapter.auth.
+_MODEL_AUTH_DIR = Path("/var/run/secrets/model")
+# Only covers the projected-volume symlink swap, which settles in well under a
+# second. A longer wait cannot help: kubelet mounts the volume before the
+# container starts, so a key absent by now is a key the Secret does not carry.
+_K8S_WAIT_TIMEOUT_S = 5.0
 _DEFAULT_POLL_INTERVAL_S = 0.5
 
 
+def _model_auth_dir_present() -> bool:
+    """True when a model auth secret is actually projected into this pod.
+
+    Kubernetes mounts projected volumes before the container's main process
+    runs, so an absent directory means the job declared no ``model.auth
+    .secret_ref`` — no token will ever appear and there is nothing to wait for.
+    """
+    try:
+        return _MODEL_AUTH_DIR.is_dir()
+    except OSError:
+        return False
+
+
 def _default_wait_timeout_s() -> float:
-    """Wait for projected ``hf-token`` only in EvalHub Kubernetes job pods."""
+    """Wait for a projected ``hf-token`` only when one could still appear."""
     mode = os.environ.get("EVALHUB_MODE", "").strip().lower()
-    if mode == "k8s":
-        return _K8S_WAIT_TIMEOUT_S
-    return 0.0
+    if mode != "k8s":
+        return 0.0
+    if not _model_auth_dir_present():
+        logger.debug(
+            "No model auth secret projected at %s; skipping HuggingFace token wait",
+            _MODEL_AUTH_DIR,
+        )
+        return 0.0
+    return _K8S_WAIT_TIMEOUT_S
 
 
 def _is_sidecar_ref_placeholder(value: str) -> bool:

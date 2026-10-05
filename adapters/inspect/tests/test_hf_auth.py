@@ -75,11 +75,39 @@ def test_default_wait_zero_outside_k8s(monkeypatch):
     assert _default_wait_timeout_s() == 0.0
 
 
-def test_default_wait_sixty_in_k8s(monkeypatch):
+def test_default_wait_in_k8s_when_auth_secret_projected(monkeypatch):
     monkeypatch.setenv("EVALHUB_MODE", "k8s")
     from _hf_auth import _K8S_WAIT_TIMEOUT_S, _default_wait_timeout_s
 
-    assert _default_wait_timeout_s() == _K8S_WAIT_TIMEOUT_S
+    with patch("_hf_auth._model_auth_dir_present", return_value=True):
+        assert _default_wait_timeout_s() == _K8S_WAIT_TIMEOUT_S
+
+
+def test_default_wait_zero_in_k8s_when_no_auth_secret(monkeypatch):
+    """A job with no model.auth.secret_ref must not stall on a doomed poll."""
+    monkeypatch.setenv("EVALHUB_MODE", "k8s")
+    from _hf_auth import _default_wait_timeout_s
+
+    with patch("_hf_auth._model_auth_dir_present", return_value=False):
+        assert _default_wait_timeout_s() == 0.0
+
+
+def test_apply_does_not_sleep_when_no_auth_secret(monkeypatch, env):
+    """Regression: unauthenticated k8s runs used to burn the full timeout."""
+    monkeypatch.setenv("EVALHUB_MODE", "k8s")
+    with patch("_hf_auth._model_auth_dir_present", return_value=False):
+        with patch("_hf_auth.read_model_auth_key", return_value=None):
+            with patch("_hf_auth.time.sleep") as sleep:
+                apply_hf_hub_auth(env)
+    sleep.assert_not_called()
+    assert "HF_TOKEN" not in env
+
+
+def test_model_auth_dir_present_tolerates_oserror():
+    from _hf_auth import _model_auth_dir_present
+
+    with patch("_hf_auth.Path.is_dir", side_effect=OSError("permission denied")):
+        assert _model_auth_dir_present() is False
 
 
 def test_build_env_integrates_hf_auth(job_spec_path):
