@@ -20,4 +20,4 @@ evals @ git+https://github.com/gsma-labs/evals.git@v1.1.0
 # latest). It affects nltk's parser/perceptron model save/load APIs, which nothing in
 # this image calls (inspect-evals uses only tokenizers, data lookup and BLEU).
 # Revisit when a fixed nltk is released.
-nltk==3.10.3
+nltk==3.10.4
